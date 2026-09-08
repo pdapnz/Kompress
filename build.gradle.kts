@@ -52,7 +52,8 @@ version = GitLabCI.getDefaultVersion(libs.versions.kompress)
         with(GitLabCI) { karmaKraftsDefaults() }
     }
 
-    signing {
-        signPublications()
-    }
+    // Отключено для JitPack-сборки — нет ключа подписи в этом окружении, для потребления библиотеки не нужно.
+    // signing {
+    //     signPublications()
+    // }
 }

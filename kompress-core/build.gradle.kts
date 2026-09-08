@@ -59,17 +59,19 @@ kotlin {
             test(listOf(NativeBuildType.RELEASE))
         }
     }
-    withJvm {
-        testRuns {
-            create("vector") { // Run tests with jdk.incubator.vector API
-                setExecutionSourceFrom(compilations["test"])
-                executionTask {
-                    modularity.inferModulePath = true
-                    jvmArgs("--add-modules", "jdk.incubator.vector")
-                }
-            }
-        }
-    }
+    // Отключено для JitPack-сборки — jdk.incubator.vector недоступен компилятору в этом окружении,
+    // а consumer'у (photo-archiver) JVM-таргет и не нужен (Android/iOS/wasmJs).
+    // withJvm {
+    //     testRuns {
+    //         create("vector") { // Run tests with jdk.incubator.vector API
+    //             setExecutionSourceFrom(compilations["test"])
+    //             executionTask {
+    //                 modularity.inferModulePath = true
+    //                 jvmArgs("--add-modules", "jdk.incubator.vector")
+    //             }
+    //         }
+    //     }
+    // }
     withWeb {
         withBrowser {
             useEsModules()
@@ -96,7 +98,7 @@ kotlin {
     applyDefaultHierarchyTemplate {
         common {
             group("jvmAndAndroid") {
-                withJvm()
+                // withJvm() // отключено для JitPack, см. выше
                 withAndroidLibrary()
             }
             group("jsAndWasm") {
@@ -115,11 +117,7 @@ kotlin {
                 implementation(libs.karbide.core)
             }
         }
-        jvmMain {
-            dependencies {
-                implementation(libs.oshi.core)
-            }
-        }
+        // jvmMain { ... } // отключено для JitPack, см. выше
         webMain {
             dependencies {
                 implementation(libs.kotlin.wrappers.browser)
@@ -130,11 +128,7 @@ kotlin {
                 implementation(libs.kotlin.test)
             }
         }
-        jvmTest {
-            dependencies {
-                implementation(libs.kotlin.test.junit)
-            }
-        }
+        // jvmTest { ... } // отключено для JitPack, см. выше
     }
 }
 
