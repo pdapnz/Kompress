@@ -51,17 +51,18 @@ kotlin {
     withSourcesJar()
     withAndroidLibrary("$group.zip")
     withNative()
-    withJvm {
-        testRuns {
-            create("vector") { // Run tests with jdk.incubator.vector API
-                setExecutionSourceFrom(compilations["test"])
-                executionTask {
-                    modularity.inferModulePath = true
-                    jvmArgs("--add-modules", "jdk.incubator.vector")
-                }
-            }
-        }
-    }
+    // Отключено для JitPack-сборки — см. kompress-core/build.gradle.kts.
+    // withJvm {
+    //     testRuns {
+    //         create("vector") { // Run tests with jdk.incubator.vector API
+    //             setExecutionSourceFrom(compilations["test"])
+    //             executionTask {
+    //                 modularity.inferModulePath = true
+    //                 jvmArgs("--add-modules", "jdk.incubator.vector")
+    //             }
+    //         }
+    //     }
+    // }
     withWeb {
         withBrowser {
             useEsModules()
@@ -74,7 +75,7 @@ kotlin {
     applyDefaultHierarchyTemplate {
         common {
             group("jvmAndAndroid") {
-                withJvm()
+                // withJvm() // отключено для JitPack, см. выше
                 withAndroidLibrary()
             }
         }
@@ -91,11 +92,7 @@ kotlin {
                 implementation(libs.kotlin.test)
             }
         }
-        jvmTest {
-            dependencies {
-                implementation(libs.kotlin.test.junit)
-            }
-        }
+        // jvmTest { ... } // отключено для JitPack, см. выше
     }
 }
 

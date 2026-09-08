@@ -1,0 +1,14 @@
+jdk:
+  - openjdk17
+install:
+  - ./gradlew --no-daemon
+    :kompress-core:publishAndroidPublicationToMavenLocal
+    :kompress-core:publishIosArm64PublicationToMavenLocal
+    :kompress-core:publishIosSimulatorArm64PublicationToMavenLocal
+    :kompress-core:publishWasmJsPublicationToMavenLocal
+    :kompress-core:publishKotlinMultiplatformPublicationToMavenLocal
+    :kompress-zip:publishAndroidPublicationToMavenLocal
+    :kompress-zip:publishIosArm64PublicationToMavenLocal
+    :kompress-zip:publishIosSimulatorArm64PublicationToMavenLocal
+    :kompress-zip:publishWasmJsPublicationToMavenLocal
+    :kompress-zip:publishKotlinMultiplatformPublicationToMavenLocal

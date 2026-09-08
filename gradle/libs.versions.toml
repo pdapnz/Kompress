@@ -1,6 +1,6 @@
 [versions]
 
-javaCompile = "25"
+javaCompile = "17" # ВРЕМЕННО для JitPack: 25 недоступен через toolchain auto-download в их песочнице
 javaTarget = "17"
 
 androidGradle = "9.2.1" # https://developer.android.com/reference/tools/gradle-api
