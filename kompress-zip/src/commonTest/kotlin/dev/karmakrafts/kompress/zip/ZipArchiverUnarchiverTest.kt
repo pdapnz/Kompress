@@ -16,11 +16,13 @@
 
 package dev.karmakrafts.kompress.zip
 
+import dev.karmakrafts.kompress.AbstractCompressor
 import dev.karmakrafts.kompress.ExperimentalCompressionApi
 import kotlinx.io.Buffer
 import kotlinx.io.Source
 import kotlinx.io.readByteArray
 import kotlinx.io.writeString
+import kotlin.math.min
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -30,6 +32,53 @@ import kotlin.time.Instant
 
 @OptIn(ExperimentalCompressionApi::class)
 class ZipArchiverUnarchiverTest {
+    /** Passthrough STORED "compressor" — a real consumer (e.g. avoiding a broken Deflater) needs one; ZIP itself has no built-in one. */
+    private class NoOpCompressor : AbstractCompressor() {
+        private var isFinishing = false
+        private var isFinished = false
+
+        override val needsInput: Boolean get() = remaining <= 0 && !isFinishing
+        override val finished: Boolean get() = isFinished
+
+        override fun compress(output: ByteArray, offset: Int, size: Int, flush: Boolean): Int {
+            if (remaining > 0) {
+                val count = min(remaining, size)
+                input.copyInto(output, offset, inputOffset, inputOffset + count)
+                inputOffset += count
+                remaining -= count
+                bytesWritten += count
+                return count
+            }
+            if (isFinishing) {
+                isFinishing = false
+                isFinished = true
+            }
+            return 0
+        }
+
+        override fun setInput(data: ByteArray, offset: Int, size: Int) {
+            super.setInput(data, offset, size)
+            bytesRead += size
+        }
+
+        override fun finish() {
+            isFinishing = true
+        }
+
+        override fun reset() {
+            input = ByteArray(0)
+            inputOffset = 0
+            inputSize = 0
+            remaining = 0
+            bytesRead = 0
+            bytesWritten = 0
+            isFinishing = false
+            isFinished = false
+        }
+
+        override fun close() = Unit
+    }
+
     private companion object {
         fun readEntryBytes(source: Source, fetchMore: () -> Boolean): ByteArray {
             val buffer = Buffer()
@@ -149,5 +198,40 @@ class ZipArchiverUnarchiverTest {
             }
             assertTrue(entryFound, "Entry 'empty.txt' should be present")
         }
+    }
+
+    @Test
+    fun `archive and unarchive STORED entry with default GPBF does not require a data descriptor`() {
+        // Регрессия: appendEntry всегда форсировал OMIT_CHECKSUM_AND_SIZES (дата-дескриптор), а
+        // ZipUnarchiver.extractStoredData явно отказывался читать STORED-записи с дескриптором —
+        // архив, написанный этой же библиотекой со STORED-компрессией, не читался ею же обратно.
+        val payload = ByteArray(5000) { (it % 256).toByte() }
+        val entry = ZipEntry(
+            modificationTime = Instant.fromEpochSeconds(1_704_067_242),
+            name = "photo.jpg",
+            compressionMethod = ZipCompressionMethod.NONE,
+            gpbf = ZipGPBF(), // дефолты (omitChecksumAndSizes = true) — то, что реально используют потребители
+        )
+        val archiveBuffer = Buffer()
+
+        archiveBuffer.zip(compressors = mapOf(ZipCompressionMethod.NONE to NoOpCompressor())).use { archiver ->
+            archiver.appendEntry(entry) { sink ->
+                sink.write(payload)
+                false
+            }
+        }
+
+        val entries = ArrayList<ZipEntry>()
+        val contents = ArrayList<ByteArray>()
+        archiveBuffer.unzip().use { unarchiver ->
+            unarchiver.forEachEntry { entry, source, fetchMore ->
+                entries += entry
+                contents += readEntryBytes(source, fetchMore)
+            }
+        }
+
+        val actualEntry = assertNotNull(entries.singleOrNull())
+        assertEquals(entry.name, actualEntry.name)
+        assertContentEquals(payload, contents.single())
     }
 }
