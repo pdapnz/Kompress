@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### Fixed
+
+- `ZipArchiver.appendEntry` always forcing `ZipGPBF.OMIT_CHECKSUM_AND_SIZES` (deferred checksum/sizes, terminated by a trailing data descriptor) regardless of the entry's own `gpbf`, while `ZipUnarchiver.extractStoredData` explicitly refuses to read `STORED` entries written that way (`"ZIP stored entries with data descriptors are not supported"`). In practice this made any archive with `ZipCompressionMethod.NONE` entries — written by this same library — unreadable by this same library's own `Unarchiver`, even though third-party readers (which fall back to the central directory) could still open it. `STORED` entries are now buffered in memory one at a time and written with real checksum/sizes directly in the local file header (no descriptor); `DEFLATE` entries are unaffected, since `Inflater.computeCompressedSize` already lets the unarchiver determine their length without one.
+
 ## [2.3.1]
 
 ### Fixed
