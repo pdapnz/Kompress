@@ -71,7 +71,9 @@ private class ZipArchiver(
         if (languageEncoding) value.encodeToByteArray()
         else value.encodeToCP437()
 
-    private fun effectiveGPBF(entry: ZipEntry): UShort = entry.gpbf.value or ZipGPBF.OMIT_CHECKSUM_AND_SIZES
+    private fun effectiveGPBF(entry: ZipEntry, omitChecksumAndSizes: Boolean = true): UShort =
+        if (omitChecksumAndSizes) entry.gpbf.value or ZipGPBF.OMIT_CHECKSUM_AND_SIZES
+        else entry.gpbf.value and ZipGPBF.OMIT_CHECKSUM_AND_SIZES.inv()
 
     private fun versionNeeded(entry: ZipEntry): UShort = when {
         entry.isZip64 -> ZipConstants.ZIP64_ZIP_VERSION
@@ -112,7 +114,8 @@ private class ZipArchiver(
     }
 
     /**
-     * See [PKWARE APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.3.7.
+     * See [PKWARE APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.3.7. Deferred
+     * placeholder checksum/sizes, followed by [appendDataDescriptor] once the real values are known.
      */
     private fun appendLocalFileHeader(entry: ZipEntry) {
         val name = encodeString(entry.gpbf.languageEncoding, entry.name)
@@ -124,6 +127,30 @@ private class ZipArchiver(
         writeChecksumAndSizes(
             entry.isZip64, ZipConstants.DEFERRED_CHECKSUM, ZipConstants.DEFERRED_SIZE, ZipConstants.DEFERRED_SIZE
         )
+        buffer.writeUShortLeFast(name.size.toUShort())
+        buffer.writeUShortLeFast(entry.extraFields.byteSize.toUShort())
+        buffer.write(name)
+        entry.extraFields.encode(buffer)
+        flushBuffer()
+    }
+
+    /**
+     * Same as [appendLocalFileHeader], but with real checksum/sizes already known — writes them directly
+     * (clearing the omit-checksum-and-sizes bit) instead of deferred placeholders, so no data descriptor
+     * needs to follow. Some readers (including our own [ZipUnarchiver]) cannot determine where a STORED
+     * entry's data ends without either this or a full second, random-access pass over the central
+     * directory — see [appendEntry].
+     */
+    private fun appendLocalFileHeaderWithKnownSizes(
+        entry: ZipEntry, checksum: UInt, uncompressedSize: Long, compressedSize: Long, isZip64: Boolean
+    ) {
+        val name = encodeString(entry.gpbf.languageEncoding, entry.name)
+        buffer.writeUIntLeFast(ZipConstants.LOCAL_FILE_HEADER_MAGIC)
+        buffer.writeUShortLeFast(if (isZip64) ZipConstants.ZIP64_ZIP_VERSION else versionNeeded(entry))
+        buffer.writeUShortLeFast(effectiveGPBF(entry, omitChecksumAndSizes = false))
+        buffer.writeUShortLeFast(entry.compressionMethod.encodedValue)
+        writeTimestamp(entry.modificationTime)
+        writeChecksumAndSizes(isZip64, checksum, uncompressedSize, compressedSize)
         buffer.writeUShortLeFast(name.size.toUShort())
         buffer.writeUShortLeFast(entry.extraFields.byteSize.toUShort())
         buffer.write(name)
@@ -174,10 +201,10 @@ private class ZipArchiver(
         flushBuffer()
     }
 
-    private inline fun appendData(compressor: Compressor, callback: (Sink) -> Boolean): Pair<UInt, Long> {
+    private inline fun appendData(target: RawSink, compressor: Compressor, callback: (Sink) -> Boolean): Pair<UInt, Long> {
         crc32.reset()
         var uncompressedSize = 0L
-        sink.compressingSink( // @formatter:off
+        target.compressingSink( // @formatter:off
             compressor = compressor,
             isSinkOwned = false,
             isCompressorOwned = false
@@ -195,19 +222,38 @@ private class ZipArchiver(
                 }
             }
         }
-        bytesWritten += compressor.bytesWritten
         return crc32.finalize() to uncompressedSize
     }
 
     override fun appendEntry(entry: ZipEntry, callback: (Sink) -> Boolean) {
         val localHeaderOffset = bytesWritten
-        appendLocalFileHeader(entry)
         val method = entry.compressionMethod
         val compressor = compressors[method]
             ?: throw UnsupportedCompressionMethodException("No compressor specified for ZIP compression method $method")
         compressor.reset()
-        val (checksum, uncompressedSize) = appendData(compressor, callback)
+
+        if (method == ZipCompressionMethod.NONE) {
+            // STORED-записи без известного размера заранее умеет читать не каждый ридер (в т.ч. наш
+            // собственный ZipUnarchiver.extractStoredData, у которого нет способа понять, где заканчиваются
+            // сырые байты записи и начинается следующая структура, если размер объявлен только в
+            // дата-дескрипторе после данных). Буферизуем запись целиком в памяти — чтобы знать настоящие
+            // checksum/размеры ДО заголовка и обойтись без дескриптора — одну запись за раз, не весь архив.
+            val staging = Buffer()
+            val (checksum, uncompressedSize) = appendData(staging, compressor, callback)
+            val compressedSize = compressor.bytesWritten
+            val isZip64 = isZip64Required(entry, uncompressedSize, compressedSize, localHeaderOffset)
+            appendLocalFileHeaderWithKnownSizes(entry, checksum, uncompressedSize, compressedSize, isZip64)
+            val stagedSize = staging.size
+            sink.write(staging, stagedSize)
+            bytesWritten += stagedSize
+            entries += QueuedEntry(entry, checksum, uncompressedSize, compressedSize, localHeaderOffset)
+            return
+        }
+
+        appendLocalFileHeader(entry)
+        val (checksum, uncompressedSize) = appendData(sink, compressor, callback)
         val compressedSize = compressor.bytesWritten
+        bytesWritten += compressedSize
         appendDataDescriptor(
             isZip64Required(entry, uncompressedSize, compressedSize, localHeaderOffset),
             checksum,
